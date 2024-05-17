@@ -9,12 +9,11 @@
 //    https://github.com/stan-dev/rstan/wiki/RStan-Getting-Started
 //
 
-// The input data is a vector 'y' of length 'N'.
 data {
   int<lower=0> N;  // Total number of households
   int<lower=0> J;  // Number of boroughs
   int<lower=1, upper=J> borough[N];  // Borough index for each household
-  int<lower=0> K;  // Total number of household-level predictors
+  int<lower=0> K;  // Total number of predictors
   int<lower=0> K_r;  // Number of household-level predictors with random slopes
   int<lower=0> K_f;  // Number of household-level predictors with fixed effects
   matrix[N, K_r] X_household_random;  // Household-level predictors with random slopes
@@ -25,7 +24,7 @@ data {
 parameters {
   matrix[K_r, J] z_beta_household_random;  // Non-centered parameterization
   vector<lower=0>[K_r] sigma_beta_random;  // SDs of the random slopes
-  vector[K_f] beta_fixed;  // Fixed effects for household-level predictors
+  vector[K_f] beta_fixed;  // Fixed effects predictors coefficient
   vector[J] z_alpha;  // Non-centered random intercepts
   real<lower=0> sigma_alpha;  // SD of borough intercepts
 }
