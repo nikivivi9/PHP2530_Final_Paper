@@ -1,0 +1,360 @@
+---
+title: "final_paper_codebook"
+author: "Yingxi Kong"
+date: "2024-05-17"
+output: pdf_document
+---
+
+```{r}
+library(tidyverse)
+library(rstan)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(reshape2)
+library(bayesplot)
+library(rstanarm)
+library(brms)
+library(MASS)
+library(glmnet)
+library(caret)
+library(corrplot)
+library(caret)
+library(ModelMetrics)
+library(pROC)
+library(gtsummary)
+library(gt)
+library(webshot2)
+
+rodent <- read.table("rodent.dat")
+rodent <- na.omit(rodent)
+rodent_num <- rodent
+```
+
+```{r}
+#correct data type
+rodent <- rodent %>%
+  mutate(borough = factor(borough, levels = c("1", "2", "3", "4", "5"),
+                          labels = c("Bronx", "Brooklyn", "Manhattan", "Queens", "Staten Island")),
+         cd = factor(cd, levels = as.character(1:55)),
+    
+         # Binary variables as factors
+         rodent2 = factor(rodent2, levels = c("0", "1"), labels = c("No", "Yes")),
+         extwin4_2 = factor(extwin4_2, levels = c("0", "1"), labels = c("No", "Yes")),
+         extflr5_2 = factor(extflr5_2, levels = c("0", "1"), labels = c("No", "Yes")),
+         intcrack2 = factor(intcrack2, levels = c("0", "1"), labels = c("No", "Yes")),
+         inthole2 = factor(inthole2, levels = c("0", "1"), labels = c("No", "Yes")),
+         intleak2 = factor(intleak2, levels = c("0", "1"), labels = c("No", "Yes")),
+         old = factor(old, levels = c("0", "1"), labels = c("No", "Yes")),
+         dilap = factor(dilap, levels = c("0", "1"), labels = c("Sound", "Dilapidated/Deteriorating")),
+         regext = factor(regext, levels = c("0", "1"), labels = c("No", "Yes")),
+         subsidy = factor(subsidy, levels = c("0", "1"), labels = c("No", "Yes")),
+         foreign = factor(foreign, levels = c("0", "1"), labels = c("No", "Yes")),
+         struct = factor(struct, levels = c("0", "1"), labels = c("Poor", "Good/Excellent")),
+         poverty = factor(poverty, levels = c("0", "1"), labels = c("No", "Yes")),
+         povertyx2 = factor(povertyx2, levels = c("0", "1"), labels = c("No", "Yes")),
+         board2 = factor(board2, levels = c("0", "1"), labels = c("No", "Yes")),
+         help = factor(help, levels = c("0", "1"), labels = c("No", "Yes")),
+
+        # Categorical variables with more than two categories
+        unitflr2 = factor(unitflr2, levels = as.character(1:10), 
+                          labels = c("Basement", "1st", "2nd", "3rd", "4th", "5th", "6th to 10th", 
+                                     "11th to 20th", "21st to 40th", "41st+")),
+        numunits = factor(numunits, levels = as.character(1:12)),
+        stories = factor(stories, levels = as.character(1:7)),
+        intpeel_cat = factor(intpeel_cat, levels = c("0", "1", "2"), labels = c("None", "Small Area", "Large Area")),
+        housing = factor(housing, levels = c("1", "2", "3", "4"), 
+                         labels = c("Public", "Rent Controlled/Stabilized", "Owned", "Other Rentals")),
+        race = factor(race, levels = as.character(1:7), 
+                      labels = c("White (non-Hispanic)", "Black (non-Hispanic)", "Puerto Rican", 
+                                 "Other Hispanic", "Asian/Pacific Islander", "Amer-Indian/Native Alaskan", 
+                                 "Two or more races")),
+        under6 = factor(under6, levels = as.character(1:6)))
+```
+
+```{r}
+# correlation analysis
+numeric_data <- rodent %>% select_if(is.numeric)
+corr <- cor(numeric_data, use = "complete.obs")
+cor_melted <- melt(corr)
+high_cor <- cor_melted %>%
+  filter(abs(value) > 0.7 & Var1 != Var2)
+print(high_cor)
+
+reduced_data <- rodent %>%
+  dplyr::select(-c(povertyx2_Mean, intcrack2_Mean, struct_Mean, ownhous_Mean,
+                   dist.stratum, bldg, dist, inthole2_Mean, help_Mean, dilap_Mean))
+
+reduced_corr <- cor(reduced_data %>% select_if(is.numeric), use = "complete.obs")
+cor_melted_reduce <- melt(reduced_corr)
+high_cor_reduce <- cor_melted_reduce %>%
+  filter(abs(value) > 0.7 & Var1 != Var2)
+print(high_cor_reduce)
+```
+
+```{r}
+# generate linear regression model with all predictors
+m1 <- glm(rodent2~., family=binomial(), data=rodent[, -c(1, 9)])
+summary(m1)
+```
+
+```{r}
+# using significant covariates in glm to create summary table
+selected_data <- rodent %>%
+   dplyr::select(borough, race, personrm, regext, subsidy, housing, intcrack2, inthole2, intleak2, struct, duration, old, help, foreign, board2_Mean, pubhous_Mean, regext_Mean, duration_Mean, inthole2_Mean, intleak2_Mean, rodent2)
+
+household_vars <- c("race", "personrm", "regext", "subsidy", "housing", "intcrack2", "inthole2", 
+                    "intleak2", "struct", "duration", "old", "help", "foreign")
+
+borough_vars <- c("board2_Mean", "pubhous_Mean", "regext_Mean", "duration_Mean", 
+                  "inthole2_Mean", "intleak2_Mean")
+
+continuous_vars <- c("personrm", "duration")
+binary_categorical_vars <- setdiff(household_vars, continuous_vars)
+
+
+table_household <- selected_data %>%
+  select(all_of(household_vars), rodent2) %>%
+  tbl_summary(by = rodent2,
+              type = list(all_continuous() ~ "continuous",
+                          all_categorical() ~ "categorical"),
+              statistic = list(all_continuous() ~ "{mean} ({sd})",
+                               all_categorical() ~ "{n} / {N} ({p}%)"),
+              label = list(race ~ "Race", personrm ~ "Number of Persons in Room",
+                           regext ~ "Regular Extension", subsidy ~ "Subsidy",
+                           housing ~ "Housing", intcrack2 ~ "Interior Cracks",
+                           inthole2 ~ "Interior Holes", intleak2 ~ "Interior Leaks",
+                           struct ~ "Structure", duration ~ "Duration",old ~ "Old",
+                           help ~ "Help", foreign ~ "Foreign")) %>%
+  add_p(test = list(all_continuous() ~ "t.test",
+                    all_categorical() ~ "chisq.test"))
+
+table_household_borough <- selected_data %>%
+  select(all_of(household_vars), borough) %>%
+  tbl_summary(by = borough,
+              type = list(all_continuous() ~ "continuous", all_categorical() ~ "categorical"),
+              statistic = list(all_continuous() ~ "{mean} ({sd})",
+                               all_categorical() ~ "{n} / {N} ({p}%)"),
+              label = list(race ~ "Race", personrm ~ "Number of Persons in Room",
+                           regext ~ "Regular Extension", subsidy ~ "Subsidy",
+                           housing ~ "Housing", intcrack2 ~ "Interior Cracks",
+                           inthole2 ~ "Interior Holes", intleak2 ~ "Interior Leaks",
+                           struct ~ "Structure", duration ~ "Duration",
+                           old ~ "Old", help ~ "Help", foreign ~ "Foreign")) %>%
+  add_p(test = list(all_continuous() ~ "t.test", all_categorical() ~ "chisq.test"))
+
+table_borough <- selected_data %>%
+  select(all_of(borough_vars), rodent2) %>%
+  tbl_summary(
+    by = rodent2,
+    type = list(all_continuous() ~ "continuous",
+                all_categorical() ~ "categorical"),
+    statistic = list(all_continuous() ~ "{mean} ({sd})",
+                     all_categorical() ~ "{n} / {N} ({p}%)"),
+    label = list(board2_Mean ~ "Board Mean", pubhous_Mean ~ "Public Housing Mean",
+                 regext_Mean ~ "Regular Extension Mean", duration_Mean ~ "Duration Mean",
+                 inthole2_Mean ~ "Interior Holes Mean", intleak2_Mean ~ "Interior Leaks Mean")) %>%
+  add_p(test = list(all_continuous() ~ "t.test",
+                    all_categorical() ~ "chisq.test"))
+
+# Convert gtsummary table to gt table
+gt_table_borough <- as_gt(table_borough)
+gt_table_household <- as_gt(table_household)
+
+# Save the gt table as an image
+gtsave(gt_table_household, filename = "summary_table_household.png")
+gtsave(gt_table_borough, filename = "summary_table_borough.png")
+```
+
+```{r}
+# select variable
+data <- rodent_num %>%
+   dplyr::select(borough, race, personrm, regext, subsidy, housing, intcrack2, inthole2, intleak2, struct, duration, old, help, foreign, board2_Mean, pubhous_Mean, regext_Mean, duration_Mean, inthole2_Mean, intleak2_Mean, rodent2)
+
+# scale duration
+data$duration <- as.numeric(scale(data$duration))
+data$duration_Mean <- as.numeric(scale(data$duration_Mean))
+
+# create data matrix for group and race
+data$race <- as.factor(data$race)
+design_matrix <- model.matrix(~ race + 0, data=data) 
+data_transformed <- cbind(design_matrix, data[, !(names(data) %in% "race")])
+
+data$housing <- as.factor(data$housing)
+design_matrix_housing <- model.matrix(~ housing + 0, data=data) 
+data_transformed <- cbind(design_matrix_housing, data_transformed[, !(names(data_transformed) %in% "housing")])
+
+# list random and xied predictors
+household_predictors_random <- c("personrm", "subsidy", "intcrack2", "inthole2", "intleak2",
+                                 "struct", "old", "foreign")
+household_predictors_fixed <- c("housing1", "housing2", "housing4", "race2", "race3", "race4", 
+                                "race5", "duration_Mean", "inthole2_Mean")
+
+# define the data list for Stan
+data_list <- list(
+  N = nrow(data_transformed),
+  J = length(unique(data_transformed$borough)),
+  borough = data_transformed$borough,
+  K = length(c(household_predictors_random, household_predictors_fixed)),
+  K_r = length(household_predictors_random),
+  K_f = length(household_predictors_fixed),
+  X_household_random = as.matrix(data_transformed[, household_predictors_random]),
+  X_fixed = as.matrix(data_transformed[, household_predictors_fixed]),
+  rodent2 = data$rodent2
+)
+
+# implement our Stan model
+loaded_fit <- stan(file = "stan_model_revise2.stan", data = data_list,
+                   iter = 4000, chains = 4,
+                   control = list(adapt_delta = 0.995, max_treedepth = 15))
+```
+
+```{r}
+# traceplot for fixed effect and random effect within borough 1
+parameters_random1 <- c("alpha[1]", "beta_household_random[1,1]", "beta_household_random[2,1]",
+                        "beta_household_random[3,1]", "beta_household_random[4,1]", "beta_household_random[5,1]",
+                        "beta_household_random[6,1]", "beta_household_random[7,1]", "beta_household_random[8,1]")
+
+parameters_fixed1 <- c("beta_fixed[1]", "beta_fixed[2]", "beta_fixed[3]", "beta_fixed[4]", "beta_fixed[5]",
+                       "beta_fixed[6]", "beta_fixed[7]", "beta_fixed[8]", "beta_fixed[9]")
+
+trace_plot_random1 <- mcmc_trace(loaded_fit, pars = parameters_random1)
+trace_plot_fixed1 <- mcmc_trace(loaded_fit, pars = parameters_fixed1)
+
+ggsave("traceplots_random.png", plot = trace_plot_random1, width = 10, height = 8)
+ggsave("traceplots_fixed.png", plot = trace_plot_fixed1, width = 10, height = 8)
+```
+
+```{r}
+# traceplot for random effect within borough 2
+parameters_random2 <- c("alpha[2]", "beta_household_random[1,2]", "beta_household_random[2,2]",
+                        "beta_household_random[3,2]", "beta_household_random[4,2]", "beta_household_random[5,2]",
+                        "beta_household_random[6,2]", "beta_household_random[7,2]", "beta_household_random[8,2]")
+
+trace_plot_random2 <- mcmc_trace(loaded_fit, pars = parameters_random2)
+ggsave("traceplots_random2.png", plot = trace_plot_random2, width = 10, height = 8)
+```
+
+```{r}
+# traceplot for random effect within borough 3
+parameters_random3 <- c("alpha[3]", "beta_household_random[1,3]", "beta_household_random[2,3]",
+                        "beta_household_random[3,3]", "beta_household_random[4,3]", "beta_household_random[5,3]",
+                        "beta_household_random[6,3]", "beta_household_random[7,3]", "beta_household_random[8,3]")
+
+trace_plot_random3 <- mcmc_trace(loaded_fit, pars = parameters_random3)
+ggsave("traceplots_random3.png", plot = trace_plot_random3, width = 10, height = 8)
+```
+
+```{r}
+# traceplot for random effect within borough 4
+parameters_random4 <- c("alpha[4]", "beta_household_random[1,4]", "beta_household_random[2,4]",
+                        "beta_household_random[3,4]", "beta_household_random[4,4]", "beta_household_random[5,4]",
+                        "beta_household_random[6,4]", "beta_household_random[7,4]", "beta_household_random[8,4]")
+
+trace_plot_random4 <- mcmc_trace(loaded_fit, pars = parameters_random4)
+ggsave("traceplots_random4.png", plot = trace_plot_random4, width = 10, height = 8)
+```
+
+```{r}
+# traceplot for random effect within borough 5
+parameters_random5 <- c("alpha[5]", "beta_household_random[1,5]", "beta_household_random[2,5]",
+                        "beta_household_random[3,5]", "beta_household_random[4,5]", "beta_household_random[5,5]",
+                        "beta_household_random[6,5]", "beta_household_random[7,5]", "beta_household_random[8,5]")
+
+trace_plot_random5 <- mcmc_trace(loaded_fit, pars = parameters_random5)
+ggsave("traceplots_random5.png", plot = trace_plot_random5, width = 10, height = 8)
+```
+
+```{r}
+# result table for fixed effect from our model
+beta_household_fixed_summary <- summary(loaded_fit, pars = "beta_fixed")$summary
+
+# Define the mapping of parameters to the selected household-level variable names
+param_to_var <- c("beta_fixed[1]" = "Public(Housing)",
+                  "beta_fixed[2]" = "Rent Controlled/Stabilized(Housing)",
+                  "beta_fixed[3]" = "Other Rentals(Housing)",
+                  "beta_fixed[4]" = "Black(Race)",
+                  "beta_fixed[5]" = "Puerto Rican(Race)",
+                  "beta_fixed[6]" = "Other Hispanic(Race)",
+                  "beta_fixed[7]" = "Asian/Pacific Islander(Race)",
+                  "beta_fixed[8]" = "duration_Mean",
+                  "beta_fixed[9]" = "inthole2_Mean")
+
+# Create a data frame for the summary
+beta_household_fixed_df <- as.data.frame(beta_household_fixed_summary) %>%
+  mutate(Parameter = rownames(beta_household_fixed_summary)) %>%
+  mutate(Parameter = param_to_var[Parameter]) %>%
+  select(Parameter, mean, sd, `2.5%`, `97.5%`)
+
+# Create a table using gt
+gt_table <- gt(beta_household_fixed_df) %>%
+  tab_header(title = "Summary of Fixed Effects for Household-level Predictors",
+             subtitle = "Posterior mean, standard deviation, and 95% credible intervals") %>%
+  cols_label(mean = "Mean", sd = "SD", `2.5%` = "2.5% CI", `97.5%` = "97.5% CI")
+
+# Print table
+print(gt_table)
+gtsave(gt_table, filename = "result_table_fixed.png") 
+```
+
+```{r}
+# Summarizing random intercepts (alpha)
+alpha_summary <- summary(loaded_fit, pars = "alpha")$summary
+alpha_df <- as.data.frame(alpha_summary) %>%
+  mutate(Parameter = paste0("alpha[", 1:5, "]")) %>%
+  select(Parameter, mean, sd, `2.5%`, `97.5%`)
+
+# Summarizing random slopes (beta_household)
+beta_household_summary <- summary(loaded_fit, pars = "beta_household_random")$summary
+beta_household_df <- as.data.frame(beta_household_summary) %>%
+  mutate(Parameter = rownames(beta_household_summary)) %>%
+  select(Parameter, mean, sd, `2.5%`, `97.5%`)
+
+# Combining both summaries into one table
+random_effects_df <- bind_rows(alpha_df, beta_household_df)
+
+names <- c()
+borough_cat <- unique(rodent$borough)
+for (name in household_predictors_random) {
+  for (i in 1:5) {
+    var_name <- paste(name, "(", borough_cat[i], ")")
+    names <- c(names, var_name)
+  }
+}
+
+alpha_name <- c()
+for (i in 1:5) {
+  alp_name <- paste("Intercept", "(", borough_cat[i], ")")
+  alpha_name <- c(alpha_name, alp_name)
+}
+
+names_random <- c(alpha_name, names)
+random_effects_df[, 1] <- names_random 
+
+# Creating a table using gt
+gt_random_effects <- gt(random_effects_df) %>%
+  tab_header(title = "Summary of Random Effects",
+             subtitle = "Posterior mean, standard deviation, and 95% credible intervals") %>%
+  cols_label(mean = "Mean", sd = "SD", `2.5%` = "2.5% CI", `97.5%` = "97.5% CI")
+
+# Print table
+print(gt_random_effects)
+gtsave(gt_random_effects, filename = "result_table.png") 
+```
+
+
+```{r}
+# fit evaluation AUC
+posterior_samples <- extract(loaded_fit)
+predicted_outcomes <-  extract(loaded_fit)$y_pred
+actual_outcomes <- data$rodent2
+
+predicted_probabilities <- apply(predicted_outcomes, 2, mean)
+predicted_probabilities <- ifelse(predicted_probabilities < 0.5, 0, 1)
+
+png("roc_curve.png")
+roc_obj <- roc(response = actual_outcomes, predictor = predicted_probabilities)
+plot(roc_obj, main = "ROC Curve", col = "#1c61b6")
+abline(a = 0, b = 1, lty = 2, col = "gray")
+text(0.6, 0.2, paste("AUC =", round(auc(roc_obj), 1)), col="#1c61b6")
+```
